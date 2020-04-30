@@ -1,0 +1,1 @@
+gcloud functions deploy InvokeEmailProcessor --runtime go111 --trigger-http --allow-unauthenticated

@@ -1,0 +1,4 @@
+git add <filename>
+git commit -m "msg"
+git push -v origin master   // to push changes to github
+git pull origin master      // to pull from github

@@ -1,0 +1,1 @@
+gcloud functions deploy PubSubProcessor --runtime go111 --trigger-topic cron-topic --allow-unauthenticated

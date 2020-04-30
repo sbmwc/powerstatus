@@ -1,0 +1,313 @@
+package common
+
+import (
+	"encoding/base64"
+	"fmt"
+	"log"
+	"net/http"
+	"regexp"
+	"sort"
+	"strings"
+
+	"google.golang.org/api/docs/v1"
+	"google.golang.org/api/gmail/v1"
+)
+
+// special username for gmail that means "my account" -- in this case sunsetbeachmutualwatercompany@gmail.com
+const user string = "me"
+const POWER_FAULT_EVENT_NAME string = "Power Fault"
+const POWER_RESTORE_EVENT_NAME string = "Power Restore"
+
+var gmailService *gmail.Service
+var docsService *docs.Service
+var eventNameRe *regexp.Regexp
+var eventTimeRe *regexp.Regexp
+
+func init() {
+	// sample event/email from Mission (but in HTML, and may contain extra whitespace/linebreaks
+	//////////////////////
+	//Mission Communications.	Mission Communications
+	//3170 Reps Miller Rd
+	//Suite 190
+	//Norcross, GA 30071-5403
+	//This is a very important alarm message from Mission Communications. It is for SBMWC at Sunset Beach Mutual Water Company / Apex Consulting .
+	// 	Unit Name	Sunset Beach
+	// 	Message	Mission RTU AC Power Fault
+	// 	Time	11 Apr 2020 15:57:34
+	// 	Message #	55614
+	//
+	//Please call toll-free +1.877.991.1911 immediately to acknowledge this message.
+	//When prompted, enter event # 55614.
+	//
+	//Click here to acknowledge this alarm.
+	/////////////////////////
+
+	// note, leading '(?s)' means to allow .* to match \n (don't stop at newlines)
+	// Directly from Mission is in one long string, however if forwarded, then
+	// newlines can be inserted for whatever reason
+	eventNameRe = regexp.MustCompile("(?s)Mission RTU AC (.*?)<") // looks for what happened by name--one of POWER_... above
+	eventTimeRe = regexp.MustCompile("(?s)Time.*?(\\d+.*?)<")     // looks for the time the event happened
+}
+
+func GetNeededScopes() []string {
+	return []string{
+		gmail.MailGoogleComScope, docs.DocumentsScope,
+	}
+}
+
+func GmailService() *gmail.Service {
+	return gmailService
+}
+
+func DocsService() *docs.Service {
+	return docsService
+}
+
+func LookForAndProcessEmails(client *http.Client, labelId string, docId string, printAllLabelIds bool, printDocName bool) *ExecutionStatus {
+	var err error
+
+	executionStatus := &ExecutionStatus{}
+
+	gmailService, err = gmail.New(client)
+	if err != nil {
+		executionStatus.ErrString = fmt.Sprintf("Unable to retrieve Gmail client: %v", err)
+		return executionStatus
+	}
+
+	docsService, err = docs.New(client)
+	if err != nil {
+		executionStatus.ErrString = fmt.Sprintf("Unable to retrieve Docs client: %v", err)
+		return executionStatus
+	}
+
+	if printAllLabelIds {
+		err = printAllLabels()
+		if err != nil {
+			executionStatus.ErrString = fmt.Sprintf("Unable to print all labels: %v", err)
+		}
+		return executionStatus
+	}
+
+	if printDocName {
+		name, err := DocName(docsService, docId)
+		if err != nil {
+			executionStatus.ErrString = fmt.Sprintf("Unable to get doc Name: %v", err)
+		}
+		fmt.Printf("Doc name of Id:%s = %s\n", docId, name)
+		return executionStatus
+	}
+
+	// get set of unread msgs on label
+	query := "is:unread"
+	msgIds := []string{}
+	pageToken := ""
+	for {
+		req := gmailService.Users.Messages.List("me").LabelIds(labelId).Q(query)
+		if pageToken != "" {
+			req.PageToken(pageToken)
+		}
+		r, err := req.Do()
+		if err != nil {
+			executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v", err)
+			return executionStatus
+		}
+		for _, m := range r.Messages {
+			msgIds = append(msgIds, m.Id)
+		}
+
+		if r.NextPageToken == "" {
+			break
+		}
+		pageToken = r.NextPageToken
+	}
+
+	// sort message ID in ascending order
+	sort.Strings(msgIds)
+
+	// read msgs and process one by one
+	for _, msgId := range msgIds {
+		msg, err := gmailService.Users.Messages.Get(user, msgId).Format("full").Do()
+		if err != nil {
+			executionStatus.ErrString = fmt.Sprintf("Unable to retrieve message %v: %v", msgId, err)
+			return executionStatus
+		}
+
+		// see if this is a testing message and if so, handle that
+		if isTestingMsg(msg) {
+			AppendToGoogleDocs(docsService, docId, "Testing msg")
+
+		} else {
+			body := getEmailContent(msg)
+			if body == "" {
+				executionStatus.addWarnMsg(fmt.Sprintf("no body content for msg:%s\n", msgId))
+			} else {
+				eventName, eventTime := getEventNameAndTime(body)
+
+				if eventName == "" || eventTime == "" {
+					executionStatus.addWarnMsg(fmt.Sprintf("ignoring msgId:%s because could not find eventName (%s) or eventTime (%s) in body %s\n", msgId, eventName, eventTime, body))
+				} else if !isValidEventName(eventName) {
+					executionStatus.addWarnMsg(fmt.Sprintf("invalid event name received:%s\n", eventName))
+
+				} else {
+					docsContent := formatPowerDocsContent(eventName, eventTime)
+					err = AppendToGoogleDocs(docsService, docId, docsContent)
+					if err != nil {
+						executionStatus.addWarnMsg(fmt.Sprintf("could not append msg %s to google docs:%v\n", docsContent, err))
+						// this is not considered fatal
+					}
+
+					emailContent := formatPowerEmailContent(eventName, eventTime)
+					err = SendEmail(gmailService, "jim@planeshavings.com" /*sbmwc-powerstatus@googlegroups.com"*/, "Power Status Notification", emailContent)
+					if err != nil {
+						executionStatus.ErrString = fmt.Sprintf("Unable to send email to google groups, content:%s, err:%v\n", emailContent, err)
+						return executionStatus
+					}
+				}
+			}
+		}
+
+		// mark msg as read (remove UNREAD label)
+		msg, err = gmailService.Users.Messages.Modify("me", msg.Id, &gmail.ModifyMessageRequest{
+			RemoveLabelIds: []string{"UNREAD"},
+		}).Do()
+		if err != nil {
+			executionStatus.ErrString = fmt.Sprintf("Unable to mark mesageID %s as UNREDAD, err:%v", msg.Id, err)
+			return executionStatus
+		}
+
+		executionStatus.addMsgId(msg.Id)
+	}
+	return executionStatus
+}
+
+func isValidEventName(eventName string) bool {
+	return eventName == POWER_FAULT_EVENT_NAME || eventName == POWER_RESTORE_EVENT_NAME
+}
+
+func isTestingMsg(msg *gmail.Message) bool {
+	// look for subject of 'test'
+	msgPart := msg.Payload
+	if msgPart != nil {
+		msgPartHeaders := msgPart.Headers
+		if msgPartHeaders != nil {
+			for _, header := range msgPartHeaders {
+				if strings.EqualFold(header.Name, "subject") {
+					return strings.EqualFold(header.Value, "test powerstatus")
+				}
+			}
+		}
+	}
+	return false
+}
+
+func printAllLabels() error {
+	labelsList, err := gmailService.Users.Labels.List(user).Do()
+	if err != nil {
+		return err
+	}
+
+	log.Printf("labelsList=%v\n", labelsList)
+
+	if len(labelsList.Labels) == 0 {
+		fmt.Printf("No labels found.")
+		return nil
+	}
+
+	for _, l := range labelsList.Labels {
+		fmt.Printf("name:%s  id:%s\n", l.Name, l.Id)
+	}
+	return nil
+}
+
+func getEventNameAndTime(body string) (string, string) {
+	var eventName, eventTime string
+
+	matches := eventNameRe.FindStringSubmatch(body)
+	if matches != nil {
+		eventName = matches[1]
+		//fmt.Printf("eventName:%s\n", eventName)
+	}
+
+	matches = eventTimeRe.FindStringSubmatch(body)
+	if matches != nil {
+		eventTime = matches[1]
+		//fmt.Printf("eventTime:%s\n", eventTime)
+	}
+
+	return eventName, eventTime
+}
+
+func getContentFromMessagePart(part *gmail.MessagePart) string {
+	mimeType := part.MimeType
+	//	fmt.Printf("mimeType:%s\n", mimeType)
+	//	d, _ := base64.URLEncoding.DecodeString(part.Body.Data)
+	//	fmt.Printf("part:%s\n", string(d))
+
+	// mimeType describes the content as in:
+	// text/plain: the message BODY only in plain text
+	// text/html: the message BODY only in HTML
+	// multipart/alternative: will contain two PARTS that are alternatives for each othe, for example:
+	//    a text/plain part for the message body in plain text
+	//    a text/html part for the message body in html
+
+	if mimeType == "text/html" || mimeType == "text/plain" {
+		body := part.Body
+		if body == nil {
+			return ""
+		}
+		data, _ := base64.URLEncoding.DecodeString(body.Data)
+		return string(data)
+
+	} else if mimeType == "multipart/alternative" {
+		// more complicated -- content consists of multiple types, called parts
+		// each in their own part section
+		for _, part := range part.Parts {
+			content := getContentFromMessagePart(part)
+			if content != "" {
+				return content
+			}
+		}
+	}
+	return ""
+}
+
+func getEmailContent(msg *gmail.Message) string {
+	payload := msg.Payload
+	return getContentFromMessagePart(payload)
+}
+
+func formatPowerDocsContent(eventName string, eventTime string) string {
+	return fmt.Sprintf("EventName:%s;  EventTime:%s", eventName, eventTime)
+}
+
+func formatPowerEmailContent(eventName string, eventTime string) string {
+	var sb strings.Builder
+
+	sb.WriteString("As of ")
+	sb.WriteString(eventTime)
+	sb.WriteString(" ")
+	if eventName == POWER_FAULT_EVENT_NAME {
+		sb.WriteString("AC power has been LOST at the Sunset Beach Mutual Water Company (SBMWC) site.")
+	} else if eventName == POWER_RESTORE_EVENT_NAME {
+		sb.WriteString("AC power has been RESTORED at the Sunset Beach Mutual Water Company (SBMWC) site.")
+	} else {
+		sb.WriteString("An unknown event has occurred at the Sunset Beach Mutual Water Company (SBMWC) site.")
+	}
+	sb.WriteString("\n\r")
+	sb.WriteString("--------------")
+	sb.WriteString("\n\r")
+	sb.WriteString("This is a notification of a power status change at the Sunset Beach Mutual Water Company (SBMWC) site.  " +
+		"The pumps that pressurize the water supply use electricity supplied by the grid (PG&E). " +
+		"If the power is out, there will be little or no water pressure. This condition will " +
+		"continue until the electricity is restored.")
+	if eventName == POWER_FAULT_EVENT_NAME {
+		sb.WriteString("  There is no time estimate for when power will be restored.")
+	}
+	sb.WriteString("\n\r")
+	sb.WriteString("If you have a life-threatening emergency, please dial 911. " +
+		"If you have a water emergency, please view the SBMWC's web site http://sunsetbeachmutualwatercompany.org " +
+		"for the water manager's contact information.")
+
+	return sb.String()
+
+}

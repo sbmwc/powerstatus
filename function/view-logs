@@ -1,0 +1,9 @@
+#!/bin/bash
+
+TN=PubSubProcessor
+if [ $# -gt 0 ]
+  then
+    TN="$1"
+fi
+
+gcloud functions logs read "$TN"

@@ -1,0 +1,1 @@
+curl https://us-central1-sbmwc-powerstatus.cloudfunctions.net/InvokeEmailProcessor

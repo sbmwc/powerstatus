@@ -1,0 +1,1 @@
+gcloud pubsub topics publish cron-topic --message "Runner"
