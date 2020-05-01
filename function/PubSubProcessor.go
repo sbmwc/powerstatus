@@ -16,11 +16,7 @@ type PubSubMessage struct {
 // This is the method invoked by pub/sub
 func PubSubProcessor(ctx context.Context, m PubSubMessage) error {
 	//	name := string(m.Data)
-	//	if name == "" {
-	//		name = "World"
-	//	}
-	//	log.Printf("Hello, %s!", name)
-	//	return nil
+	//	fmt.Printf("name:%s\n", name)   // name may be "" if nothing set in scheduler
 
 	client := getHTTPClientUsingDB()
 	options := getOptionsFromDB()

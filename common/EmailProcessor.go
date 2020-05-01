@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/gmail/v1"
@@ -231,7 +232,15 @@ func getEventNameAndTime(body string) (string, string) {
 	matches = eventTimeRe.FindStringSubmatch(body)
 	if matches != nil {
 		eventTime = matches[1]
-		//fmt.Printf("eventTime:%s\n", eventTime)
+		//fmt.Printf("eventTime in email body:%s\n", eventTime)
+
+		// The time in the email body isn't great.  So we'll attempt to convert it
+		// to a more user-friendly time format
+		loc, _ := time.LoadLocation("US/Pacific")
+		parsedTime, err := time.ParseInLocation("_2 Jan 2006 15:04:05", eventTime, loc)
+		if err == nil {
+			eventTime = parsedTime.Format("Mon Jan 2 3:04:05 PM MST")
+		}
 	}
 
 	return eventName, eventTime
