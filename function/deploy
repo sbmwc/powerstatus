@@ -1,1 +1,1 @@
-gcloud functions deploy PubSubProcessor --runtime go111 --trigger-topic cron-topic --allow-unauthenticated
+gcloud functions deploy PubSubProcessor --runtime go111 --trigger-topic cron-topic --memory=128MB 
