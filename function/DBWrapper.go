@@ -3,6 +3,7 @@ package function
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	//       "html"
 	"net/http"
 
@@ -18,12 +19,9 @@ var datastoreClient *datastore.Client
 var httpClient *http.Client
 var options FunctionOptions
 
-type ClientCredentials struct {
+type Credentials struct {
 	JsonCredentials string
-}
-
-type Token struct {
-	JsonToken string
+	JsonToken       string
 }
 
 type FunctionOptions struct {
@@ -39,29 +37,20 @@ func init() {
 	ctx = context.Background()
 	datastoreClient, _ = datastore.NewClient(ctx, datastore.DetectProjectID)
 
-	k := datastore.NameKey("credentials", "user-credentials", nil)
-	var clientCredentials ClientCredentials
-	if err := datastoreClient.Get(ctx, k, &clientCredentials); err != nil {
-		fmt.Printf("Failed to get value: %v", err)
+	// get credentials and token from DB
+	k := datastore.NameKey("credentials", "gmail-credentials", nil)
+	var credentials Credentials
+	if err := datastoreClient.Get(ctx, k, &credentials); err != nil {
+		log.Fatalf("Failed to get DB credentials: %v\n", err)
 	}
-	fmt.Printf("JsonCredentials from DB:%v\n", clientCredentials)
 
-	// If modifying these scopes, delete your previously saved token.json.
-	config, err := google.ConfigFromJSON([]byte(clientCredentials.JsonCredentials), common.GetNeededScopes()[:]...)
+	config, err := google.ConfigFromJSON([]byte(credentials.JsonCredentials), common.GetNeededScopes()[:]...)
 	if err != nil {
-		fmt.Printf("Unable to parse client secret file to config: %v", err)
+		log.Fatalf("Unable to parse client secret file to auth2.config: %v\n", err)
 	}
 
-	//read token from DB
-	k = datastore.NameKey("tokens", "user-token", nil)
-	var token Token
-	if err := datastoreClient.Get(ctx, k, &token); err != nil {
-		fmt.Printf("Failed to get token: %v", err)
-	}
-	fmt.Printf("json token from DB:%s\n", token.JsonToken)
 	tok := &oauth2.Token{}
-	json.Unmarshal([]byte(token.JsonToken), tok)
-	fmt.Printf("token before:%v\n", *tok)
+	json.Unmarshal([]byte(credentials.JsonToken), tok)
 
 	httpClient = config.Client(ctx, tok)
 
@@ -72,8 +61,10 @@ func init() {
 	// read DB to get options
 	k = datastore.NameKey("options", "function-options", nil)
 	if err := datastoreClient.Get(ctx, k, &options); err != nil {
-		fmt.Printf("Failed to get value: %v", err)
+		log.Fatalf("Failed to get function options: %v\n", err)
 	}
+
+	fmt.Printf("Successfully inititailzed from DB\n")
 }
 
 func getHTTPClientUsingDB() *http.Client {
@@ -90,32 +81,35 @@ func NoError() string {
 	return noError
 }
 
-// return true if what is currently stored is NoError()
+// return true if either:
+// 1. DB had NoError() and newErrorString is not NoError() or
+// 2. DB had an error (not NoError()) and newErrorString is NoError()
+// (IOWs, return true if DB flipped from NoError() to an error string or visa-versa)
 func storeErrorString(newErrorString string) (bool, error) {
-	var errorData ErrorData
+	var lastErrorInDB ErrorData
 	k := datastore.NameKey("errors", "last-error", nil)
-	err := datastoreClient.Get(ctx, k, &errorData)
+	err := datastoreClient.Get(ctx, k, &lastErrorInDB)
 	if err != nil {
 		return false, err
 	}
 
 	if newErrorString == NoError() {
-		if errorData.ErrorString == NoError() {
+		if lastErrorInDB.ErrorString == NoError() {
 			return false, nil // no change
 		} else {
-			errorData.ErrorString = NoError()
-			datastoreClient.Put(ctx, k, &errorData)
+			lastErrorInDB.ErrorString = NoError()
+			datastoreClient.Put(ctx, k, &lastErrorInDB)
 			return true, nil // changed
 		}
 	} else {
-		if errorData.ErrorString == NoError() {
-			errorData.ErrorString = newErrorString
-			datastoreClient.Put(ctx, k, &errorData)
+		if lastErrorInDB.ErrorString == NoError() {
+			lastErrorInDB.ErrorString = newErrorString
+			datastoreClient.Put(ctx, k, &lastErrorInDB)
 			return true, nil // changed
 		} else {
-			errorData.ErrorString = newErrorString
-			datastoreClient.Put(ctx, k, &errorData)
-			return false, nil // error in DB was updated (technically changed, but not to NoError()
+			lastErrorInDB.ErrorString = newErrorString
+			datastoreClient.Put(ctx, k, &lastErrorInDB)
+			return false, nil // error in DB was changed, but not to NoError()
 		}
 	}
 }

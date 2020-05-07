@@ -13,9 +13,8 @@ To see more details of the function or environment, go to https://console.cloud.
 as sunsetbeachmutualwatercompany@gmail.com
 
 Requirements to be set in the google datastore:
-kind=credentials  name=user-credentials   Properties={JsonCredentials=<Json encoded credentials>}
-kind=tokens       name=user-token         Properties={JsonToken=<Json encoded token>}
+kind=credentials  name=gmail-credentials   Properties={JsonCredentials=<Json encoded credentials>, JsonToken=<Json encoded token>}
 kind=options      name=function-options   Properties={DocId=<docId>, LabelId=<labelId>}
 kind=errors       name=last-error         Properties={ErrorString="<none>"}
 
-credentials/user-credentials and tokens/user-tokens can be obtained from executable directory
+credentials/user-credentials can be obtained from executable directory
