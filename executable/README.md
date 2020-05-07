@@ -12,12 +12,12 @@ run options:
 
 
 Security/Tokens
-This program uses two files for security: credentials.json and tokens.json.
+This program uses two files for security: credentials.json and token.json.
 
 credentials.json is the secret key used for OAuth2 authentication to gmail/docs
-tokens.json is a short-lived bearer token that is automatically updated
+token.json is a short-lived bearer token that is automatically updated
 
-tokens.json is based on the scopes (permissions) required.  If any scope changes, 
-delete tokens.json to start the new tokens.json re-creation process, which involves
+token.json is based on the scopes (permissions) required.  If any scope changes, 
+delete token.json to start the new token.json re-creation process, which involves
 accepting the new security screens.  Note: probably need to update the google
-cloud Datastore when a new vesion of tokens.json so that the function works
+cloud Datastore when a new vesion of token.json so that the function works
