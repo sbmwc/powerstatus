@@ -6,7 +6,7 @@ import (
 	"sbmwc/powerstatus/common"
 )
 
-var statusEmailTo string = "jim@planeshavings.com, sunsetbeachmutualwatercompany@gmail.com"
+var statusEmailTo string = "jim@planeshavings.com"
 
 // PubSubMessage is the payload of a Pub/Sub event.
 type PubSubMessage struct {
