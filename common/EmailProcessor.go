@@ -3,7 +3,6 @@ package common
 import (
 	"encoding/base64"
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -19,8 +18,6 @@ const user string = "me"
 const POWER_FAULT_EVENT_NAME string = "Power Fault"
 const POWER_RESTORE_EVENT_NAME string = "Power Restore"
 
-var gmailService *gmail.Service
-var docsService *docs.Service
 var eventNameRe *regexp.Regexp
 var eventTimeRe *regexp.Regexp
 
@@ -50,60 +47,122 @@ func init() {
 	eventTimeRe = regexp.MustCompile("(?s)Time.*?(\\d+.*?)<")     // looks for the time the event happened
 }
 
+type EmailProcessor struct {
+	client       *http.Client
+	gmailService *gmail.Service
+	docsService  *docs.Service
+}
+
+type LabelInfo struct {
+	Id   string
+	Name string
+}
+
 func GetNeededScopes() []string {
 	return []string{
 		gmail.MailGoogleComScope, docs.DocumentsScope,
 	}
 }
 
-func GmailService() *gmail.Service {
-	return gmailService
+func NewEmailProcessor(client *http.Client) (*EmailProcessor, error) {
+	gmailService, err := gmail.New(client)
+	if err != nil {
+		return nil, err
+	}
+
+	docsService, err := docs.New(client)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EmailProcessor{client, gmailService, docsService}, nil
 }
 
-func DocsService() *docs.Service {
-	return docsService
+func (processor *EmailProcessor) GetAllLabels() ([]LabelInfo, error) {
+	labelsList, err := processor.gmailService.Users.Labels.List(user).Do()
+	if err != nil {
+		return nil, err
+	}
+
+	var result []LabelInfo
+
+	for _, l := range labelsList.Labels {
+		result = append(result, LabelInfo{l.Id, l.Name})
+	}
+	return result, nil
 }
 
-func LookForAndProcessEmails(client *http.Client, labelId string, docId string, printAllLabelIds bool, printDocName bool) *ExecutionStatus {
-	var err error
+func (processor *EmailProcessor) GetDocName(docId string) (string, error) {
+	doc, err := processor.docsService.Documents.Get(docId).Do()
+	if err != nil {
+		return "unknown", err
+	}
+	return doc.Title, nil
+}
 
+func (processor *EmailProcessor) AppendToGoogleDocs(docId string, str string) error {
+	now := time.Now()
+
+	loc, _ := time.LoadLocation("US/Pacific")
+	if loc != nil {
+		now = now.In(loc)
+	}
+	formattedTime := now.Format("Mon Jan 2 15:04:05 MST")
+
+	batchUpdateDocRequest := &docs.BatchUpdateDocumentRequest{}
+	batchUpdateDocRequest.Requests = append(batchUpdateDocRequest.Requests,
+		&docs.Request{
+			InsertText: &docs.InsertTextRequest{
+				Text:                 fmt.Sprintf("%s:: %s\n", formattedTime, str),
+				EndOfSegmentLocation: &docs.EndOfSegmentLocation{},
+			},
+		})
+	_, err := processor.docsService.Documents.BatchUpdate(docId, batchUpdateDocRequest).Do()
+	return err
+}
+
+func (processor *EmailProcessor) SendEmail(to string, subject string, content string) error {
+
+	header := make(map[string]string)
+	header["From"] = "sunsetbeachmutualwatercompany@gmail.com"
+	header["To"] = to
+	header["Subject"] = subject
+	header["MIME-Version"] = "1.0"
+	header["Content-Type"] = "text/plain; charset=\"utf-8\""
+	header["Content-Transfer-Encoding"] = "base64"
+
+	var sb strings.Builder
+
+	for k, v := range header {
+		sb.WriteString(k)
+		sb.WriteString(": ")
+		sb.WriteString(v)
+		sb.WriteString("\r\n")
+	}
+	sb.WriteString("\n\r")
+	sb.WriteString(content)
+
+	gmsg := gmail.Message{
+		Raw: base64.RawURLEncoding.EncodeToString([]byte(sb.String())),
+	}
+
+	_, err := processor.gmailService.Users.Messages.Send("me", &gmsg).Do()
+	if err != nil {
+		return err
+	}
+	//fmt.Printf("Sent message id:%s\n", sentMessage.Id)
+	return nil
+}
+
+func (processor *EmailProcessor) LookForAndProcessEmails(labelId string, docId string) *ExecutionStatus {
 	executionStatus := &ExecutionStatus{}
-
-	gmailService, err = gmail.New(client)
-	if err != nil {
-		executionStatus.ErrString = fmt.Sprintf("Unable to retrieve Gmail client: %v", err)
-		return executionStatus
-	}
-
-	docsService, err = docs.New(client)
-	if err != nil {
-		executionStatus.ErrString = fmt.Sprintf("Unable to retrieve Docs client: %v", err)
-		return executionStatus
-	}
-
-	if printAllLabelIds {
-		err = printAllLabels()
-		if err != nil {
-			executionStatus.ErrString = fmt.Sprintf("Unable to print all labels: %v", err)
-		}
-		return executionStatus
-	}
-
-	if printDocName {
-		name, err := DocName(docsService, docId)
-		if err != nil {
-			executionStatus.ErrString = fmt.Sprintf("Unable to get doc Name: %v", err)
-		}
-		fmt.Printf("Doc name of Id:%s = %s\n", docId, name)
-		return executionStatus
-	}
 
 	// get set of unread msgs on label
 	query := "is:unread"
 	msgIds := []string{}
 	pageToken := ""
 	for {
-		req := gmailService.Users.Messages.List("me").LabelIds(labelId).Q(query)
+		req := processor.gmailService.Users.Messages.List("me").LabelIds(labelId).Q(query)
 		if pageToken != "" {
 			req.PageToken(pageToken)
 		}
@@ -127,7 +186,7 @@ func LookForAndProcessEmails(client *http.Client, labelId string, docId string, 
 
 	// read msgs and process one by one
 	for _, msgId := range msgIds {
-		msg, err := gmailService.Users.Messages.Get(user, msgId).Format("full").Do()
+		msg, err := processor.gmailService.Users.Messages.Get(user, msgId).Format("full").Do()
 		if err != nil {
 			executionStatus.ErrString = fmt.Sprintf("Unable to retrieve message %v: %v", msgId, err)
 			return executionStatus
@@ -135,7 +194,7 @@ func LookForAndProcessEmails(client *http.Client, labelId string, docId string, 
 
 		// see if this is a testing message and if so, handle that
 		if isTestingMsg(msg) {
-			AppendToGoogleDocs(docsService, docId, "Testing msg")
+			processor.AppendToGoogleDocs(docId, "Testing msg")
 
 		} else {
 			body := getEmailContent(msg)
@@ -151,14 +210,14 @@ func LookForAndProcessEmails(client *http.Client, labelId string, docId string, 
 
 				} else {
 					docsContent := formatPowerDocsContent(eventName, eventTime)
-					err = AppendToGoogleDocs(docsService, docId, docsContent)
+					err = processor.AppendToGoogleDocs(docId, docsContent)
 					if err != nil {
 						executionStatus.addWarnMsg(fmt.Sprintf("could not append msg %s to google docs:%v\n", docsContent, err))
 						// this is not considered fatal
 					}
 
 					emailContent := formatPowerEmailContent(eventName, eventTime)
-					err = SendEmail(gmailService, "jim@planeshavings.com" /*sbmwc-powerstatus@googlegroups.com"*/, "Power Status Notification", emailContent)
+					err = processor.SendEmail("jim@planeshavings.com" /*sbmwc-powerstatus@googlegroups.com"*/, "Power Status Notification", emailContent)
 					if err != nil {
 						executionStatus.ErrString = fmt.Sprintf("Unable to send email to google groups, content:%s, err:%v\n", emailContent, err)
 						return executionStatus
@@ -168,7 +227,7 @@ func LookForAndProcessEmails(client *http.Client, labelId string, docId string, 
 		}
 
 		// mark msg as read (remove UNREAD label)
-		msg, err = gmailService.Users.Messages.Modify("me", msg.Id, &gmail.ModifyMessageRequest{
+		msg, err = processor.gmailService.Users.Messages.Modify("me", msg.Id, &gmail.ModifyMessageRequest{
 			RemoveLabelIds: []string{"UNREAD"},
 		}).Do()
 		if err != nil {
@@ -199,25 +258,6 @@ func isTestingMsg(msg *gmail.Message) bool {
 		}
 	}
 	return false
-}
-
-func printAllLabels() error {
-	labelsList, err := gmailService.Users.Labels.List(user).Do()
-	if err != nil {
-		return err
-	}
-
-	log.Printf("labelsList=%v\n", labelsList)
-
-	if len(labelsList.Labels) == 0 {
-		fmt.Printf("No labels found.")
-		return nil
-	}
-
-	for _, l := range labelsList.Labels {
-		fmt.Printf("name:%s  id:%s\n", l.Name, l.Id)
-	}
-	return nil
 }
 
 func getEventNameAndTime(body string) (string, string) {

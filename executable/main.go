@@ -22,7 +22,39 @@ func main() {
 
 	client := getHTTPClientUsingFilesystem()
 
-	executionStatus := common.LookForAndProcessEmails(client, *labelIdPtr, *docIdPtr, *printAllLabelIdsPtr, *printDocNamePtr)
+	processor, err := common.NewEmailProcessor(client)
+	if err != nil {
+		fmt.Printf("ERROR:Could not create processor:%v\n", err)
+		return
+	}
+
+	if *printAllLabelIdsPtr {
+		labelsInfo, err := processor.GetAllLabels()
+		if err != nil {
+			fmt.Printf("Could not get labels:%v\n", err)
+		} else {
+			for _, l := range labelsInfo {
+				fmt.Printf("Label Name:%s, LabelId:%s\n", l.Name, l.Id)
+			}
+		}
+		return
+	}
+
+	if *printDocNamePtr {
+		if *docIdPtr == "" {
+			fmt.Printf("Missing docId")
+		} else {
+			name, err := processor.GetDocName(*docIdPtr)
+			if err != nil {
+				fmt.Printf("Could not get doc name:%v\n", err)
+			} else {
+				fmt.Printf("Doc name:%s\n", name)
+			}
+		}
+		return
+	}
+
+	executionStatus := processor.LookForAndProcessEmails(*labelIdPtr, *docIdPtr)
 	if executionStatus.ErrString != "" {
 		fmt.Printf("ERROR:%s\n", executionStatus.ErrString)
 		return
