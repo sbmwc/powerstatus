@@ -159,8 +159,8 @@ func (processor *EmailProcessor) SendEmail(to string, subject string, plaintext 
 }
 
 func (processor *EmailProcessor) DeleteEmail(msgId string) {
-	// permanently delete a message -- this operation cannot be undone. Possible to use Messages.Trash instead
-	processor.gmailService.Users.Messages.Delete("me", msgId)
+	// move to trash -- possible to permanently delete a message via Delete()
+	processor.gmailService.Users.Messages.Trash("me", msgId).Do()
 }
 
 func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
@@ -240,18 +240,18 @@ func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
 					}
 				}
 			}
+
+			// mark msg as read (remove UNREAD label)
+			msg, err = processor.gmailService.Users.Messages.Modify("me", msgId, &gmail.ModifyMessageRequest{
+				RemoveLabelIds: []string{"UNREAD"},
+			}).Do()
+			if err != nil {
+				executionStatus.ErrString = fmt.Sprintf("Unable to mark mesageID %s as UNREDAD, err:%v", msgId, err)
+				return executionStatus
+			}
 		}
 
-		// mark msg as read (remove UNREAD label)
-		msg, err = processor.gmailService.Users.Messages.Modify("me", msg.Id, &gmail.ModifyMessageRequest{
-			RemoveLabelIds: []string{"UNREAD"},
-		}).Do()
-		if err != nil {
-			executionStatus.ErrString = fmt.Sprintf("Unable to mark mesageID %s as UNREDAD, err:%v", msg.Id, err)
-			return executionStatus
-		}
-
-		executionStatus.addMsgId(msg.Id)
+		executionStatus.addMsgId(msgId)
 	}
 	return executionStatus
 }
