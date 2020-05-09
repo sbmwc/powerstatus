@@ -19,7 +19,6 @@ const noError string = "<none>"
 var ctx context.Context
 var datastoreClient *datastore.Client
 var httpClient *http.Client
-var processor *common.EmailProcessor
 
 // PubSubMessage is the payload of a Pub/Sub event.
 type PubSubMessage struct {
@@ -34,7 +33,7 @@ type Credentials struct {
 type FunctionConfig struct {
 	LabelId                    string
 	DocId                      string
-	ErrorAndWarnEmailAddresses string
+	NotificationEmailAddresses string
 }
 
 // stores last error, or noError
@@ -67,19 +66,12 @@ func init() {
 	//	updatedToken, _ := config.TokenSource(ctx, tok).Token()
 	//	fmt.Printf("token after:%v\n", *updatedToken)
 
-	// get and cache processor
-	processor, err = common.NewEmailProcessor(httpClient)
-	if err != nil {
-		log.Fatalf("ERROR:Could not create processor:%v\n", err)
-	}
-
 	fmt.Printf("Successfully inititailzed from DB\n")
 }
 
 // This is the method invoked by pub/sub
 func PubSubProcessor(ctx context.Context, m PubSubMessage) error {
-	//	name := string(m.Data)
-	//	fmt.Printf("name:%s\n", name)   // name may be "" if nothing set in scheduler
+	operation := string(m.Data)
 
 	// read DB to get config
 	// read every execution (vs init()) so that we can dynamcially change
@@ -90,7 +82,24 @@ func PubSubProcessor(ctx context.Context, m PubSubMessage) error {
 		log.Fatalf("Failed to get function config: %v\n", err)
 	}
 
-	executionStatus := processor.LookForAndProcessEmails(functionConfig.LabelId, functionConfig.DocId)
+	processor, err := common.NewEmailProcessor(httpClient, functionConfig.LabelId, functionConfig.DocId, functionConfig.NotificationEmailAddresses)
+	if err != nil {
+		log.Fatalf("ERROR:Could not create processor:%v\n", err)
+	}
+
+	if operation == "" || operation == "invoke" {
+		return invoke(processor, functionConfig)
+	} else if operation == "selftest" {
+		return selftest(processor, functionConfig)
+	} else {
+		err := fmt.Errorf("invalid operation:%s\n", operation)
+		fmt.Printf("ERROR:%v\n", err)
+		return err
+	}
+}
+
+func invoke(processor *common.EmailProcessor, functionConfig FunctionConfig) error {
+	executionStatus := processor.LookForAndProcessEmails()
 
 	if executionStatus.ErrString == "" {
 		// success!
@@ -99,25 +108,49 @@ func PubSubProcessor(ctx context.Context, m PubSubMessage) error {
 		if b, _ := storeErrorString(noError); b {
 			// previous run had an error, so send out notification of all-good
 			okstr := "Successful run after previous error(s)"
-			processor.AppendToGoogleDocs(functionConfig.DocId, okstr)
-			processor.SendEmail(functionConfig.ErrorAndWarnEmailAddresses, "Powerstatus Script OK", okstr)
+			processor.AppendToGoogleDocs(okstr)
+			processor.SendEmail(functionConfig.NotificationEmailAddresses, "Powerstatus Script OK", okstr)
 		}
 
 		if len(executionStatus.WarnMsgs) > 0 {
 			warnStr := fmt.Sprintf("Warnings:%v\n", executionStatus.WarnMsgs)
-			processor.AppendToGoogleDocs(functionConfig.DocId, warnStr)
-			processor.SendEmail(functionConfig.ErrorAndWarnEmailAddresses, "Powerstatus Script Warning", warnStr)
+			processor.AppendToGoogleDocs(warnStr)
+			processor.SendEmail(functionConfig.NotificationEmailAddresses, "Powerstatus Script Warning", warnStr)
 		}
 	} else {
 		// error!
-		fmt.Printf("ERROR:%s\n", executionStatus.ErrString)
+		errStr := fmt.Sprintf("ERROR:%s\n", executionStatus.ErrString)
+		fmt.Printf(errStr)
 
 		if b, _ := storeErrorString(executionStatus.ErrString); b {
 			// first error -- i.e., no previous error so send out notification
-			processor.AppendToGoogleDocs(functionConfig.DocId, "ERROR:"+executionStatus.ErrString)
-			processor.SendEmail(functionConfig.ErrorAndWarnEmailAddresses, "Powerstatus Script Error!", "ERROR:"+executionStatus.ErrString)
+			processor.AppendToGoogleDocs(errStr)
+			processor.SendEmail(functionConfig.NotificationEmailAddresses, "Powerstatus Script Error!", errStr)
+			return fmt.Errorf(errStr)
 		}
 	}
+	return nil
+}
+
+func selftest(processor *common.EmailProcessor, functionConfig FunctionConfig) error {
+	// send myself a gmail with appropriate label set so that the
+	// next invoke() will pick it up
+	executionStatus := processor.StartSelftest()
+	if executionStatus.ErrString == "" {
+		// success!
+		fmt.Printf("Sent selftest")
+		if len(executionStatus.WarnMsgs) > 0 {
+			warnStr := fmt.Sprintf("Sending selftest warnings:%v\n", executionStatus.WarnMsgs)
+			processor.AppendToGoogleDocs(warnStr)
+			processor.SendEmail(functionConfig.NotificationEmailAddresses, "Sending selftest Script Warning", warnStr)
+		}
+	} else {
+		// error!
+		errStr := fmt.Sprintf("Sending selftest ERROR:%s\n", executionStatus.ErrString)
+		processor.SendEmail(functionConfig.NotificationEmailAddresses, "Sending selftest Script Error!", errStr)
+		return fmt.Errorf(errStr)
+	}
+
 	return nil
 }
 

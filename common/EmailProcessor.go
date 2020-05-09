@@ -14,9 +14,10 @@ import (
 )
 
 // special username for gmail that means "my account" -- in this case sunsetbeachmutualwatercompany@gmail.com
-const user string = "me"
+const user string = "sunsetbeachmutualwatercompany@gmail.com" // "me"
 const POWER_FAULT_EVENT_NAME string = "Power Fault"
 const POWER_RESTORE_EVENT_NAME string = "Power Restore"
+const selftestSubject = "powerstatus selftest"
 
 var eventNameRe *regexp.Regexp
 var eventTimeRe *regexp.Regexp
@@ -48,9 +49,12 @@ func init() {
 }
 
 type EmailProcessor struct {
-	client       *http.Client
-	gmailService *gmail.Service
-	docsService  *docs.Service
+	client                     *http.Client
+	labelId                    string
+	docId                      string
+	NotificationEmailAddresses string
+	gmailService               *gmail.Service
+	docsService                *docs.Service
 }
 
 type LabelInfo struct {
@@ -64,7 +68,7 @@ func GetNeededScopes() []string {
 	}
 }
 
-func NewEmailProcessor(client *http.Client) (*EmailProcessor, error) {
+func NewEmailProcessor(client *http.Client, labelId string, docId string, notificationEmailAddresses string) (*EmailProcessor, error) {
 	gmailService, err := gmail.New(client)
 	if err != nil {
 		return nil, err
@@ -75,7 +79,7 @@ func NewEmailProcessor(client *http.Client) (*EmailProcessor, error) {
 		return nil, err
 	}
 
-	return &EmailProcessor{client, gmailService, docsService}, nil
+	return &EmailProcessor{client, labelId, docId, notificationEmailAddresses, gmailService, docsService}, nil
 }
 
 func (processor *EmailProcessor) GetAllLabels() ([]LabelInfo, error) {
@@ -92,22 +96,22 @@ func (processor *EmailProcessor) GetAllLabels() ([]LabelInfo, error) {
 	return result, nil
 }
 
-func (processor *EmailProcessor) GetDocName(docId string) (string, error) {
-	doc, err := processor.docsService.Documents.Get(docId).Do()
+func (processor *EmailProcessor) GetDocName() (string, error) {
+	doc, err := processor.docsService.Documents.Get(processor.docId).Do()
 	if err != nil {
 		return "unknown", err
 	}
 	return doc.Title, nil
 }
 
-func (processor *EmailProcessor) AppendToGoogleDocs(docId string, str string) error {
+func (processor *EmailProcessor) AppendToGoogleDocs(str string) error {
 	now := time.Now()
 
 	loc, _ := time.LoadLocation("US/Pacific")
 	if loc != nil {
 		now = now.In(loc)
 	}
-	formattedTime := now.Format("Mon Jan 2 15:04:05 MST")
+	formattedTime := now.Format("Mon Jan 2 3:04:05 MST")
 
 	batchUpdateDocRequest := &docs.BatchUpdateDocumentRequest{}
 	batchUpdateDocRequest.Requests = append(batchUpdateDocRequest.Requests,
@@ -117,18 +121,18 @@ func (processor *EmailProcessor) AppendToGoogleDocs(docId string, str string) er
 				EndOfSegmentLocation: &docs.EndOfSegmentLocation{},
 			},
 		})
-	_, err := processor.docsService.Documents.BatchUpdate(docId, batchUpdateDocRequest).Do()
+	_, err := processor.docsService.Documents.BatchUpdate(processor.docId, batchUpdateDocRequest).Do()
 	return err
 }
 
-func (processor *EmailProcessor) SendEmail(to string, subject string, content string) error {
+func (processor *EmailProcessor) SendEmail(to string, subject string, plaintext string) error {
 
 	header := make(map[string]string)
 	header["From"] = "sunsetbeachmutualwatercompany@gmail.com"
 	header["To"] = to
 	header["Subject"] = subject
 	header["MIME-Version"] = "1.0"
-	header["Content-Type"] = "text/plain; charset=\"utf-8\""
+	header["Content-Type"] = "text/plain; charset=utf-8"
 	header["Content-Transfer-Encoding"] = "base64"
 
 	var sb strings.Builder
@@ -139,11 +143,11 @@ func (processor *EmailProcessor) SendEmail(to string, subject string, content st
 		sb.WriteString(v)
 		sb.WriteString("\r\n")
 	}
-	sb.WriteString("\n\r")
-	sb.WriteString(content)
+	sb.WriteString("\r\n")
+	sb.WriteString(plaintext)
 
 	gmsg := gmail.Message{
-		Raw: base64.RawURLEncoding.EncodeToString([]byte(sb.String())),
+		Raw: base64.StdEncoding.EncodeToString([]byte(sb.String())),
 	}
 
 	_, err := processor.gmailService.Users.Messages.Send("me", &gmsg).Do()
@@ -154,7 +158,12 @@ func (processor *EmailProcessor) SendEmail(to string, subject string, content st
 	return nil
 }
 
-func (processor *EmailProcessor) LookForAndProcessEmails(labelId string, docId string) *ExecutionStatus {
+func (processor *EmailProcessor) DeleteEmail(msgId string) {
+	// permanently delete a message -- this operation cannot be undone. Possible to use Messages.Trash instead
+	processor.gmailService.Users.Messages.Delete("me", msgId)
+}
+
+func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
 	executionStatus := &ExecutionStatus{}
 
 	// get set of unread msgs on label
@@ -162,7 +171,7 @@ func (processor *EmailProcessor) LookForAndProcessEmails(labelId string, docId s
 	msgIds := []string{}
 	pageToken := ""
 	for {
-		req := processor.gmailService.Users.Messages.List("me").LabelIds(labelId).Q(query)
+		req := processor.gmailService.Users.Messages.List("me").LabelIds(processor.labelId).Q(query)
 		if pageToken != "" {
 			req.PageToken(pageToken)
 		}
@@ -193,8 +202,15 @@ func (processor *EmailProcessor) LookForAndProcessEmails(labelId string, docId s
 		}
 
 		// see if this is a testing message and if so, handle that
-		if isTestingMsg(msg) {
-			processor.AppendToGoogleDocs(docId, "Testing msg")
+		if isSelftestEmail(msg) {
+			processor.AppendToGoogleDocs("Selftest OK")
+			if processor.NotificationEmailAddresses != "" {
+				processor.SendEmail(processor.NotificationEmailAddresses, "selftest OK", "")
+			} else {
+				fmt.Printf("Selftest OK\n")
+			}
+			// delete the original selftest email
+			processor.DeleteEmail(msgId)
 
 		} else {
 			body := getEmailContent(msg)
@@ -210,7 +226,7 @@ func (processor *EmailProcessor) LookForAndProcessEmails(labelId string, docId s
 
 				} else {
 					docsContent := formatPowerDocsContent(eventName, eventTime)
-					err = processor.AppendToGoogleDocs(docId, docsContent)
+					err = processor.AppendToGoogleDocs(docsContent)
 					if err != nil {
 						executionStatus.addWarnMsg(fmt.Sprintf("could not append msg %s to google docs:%v\n", docsContent, err))
 						// this is not considered fatal
@@ -240,19 +256,38 @@ func (processor *EmailProcessor) LookForAndProcessEmails(labelId string, docId s
 	return executionStatus
 }
 
+func (processor *EmailProcessor) StartSelftest() *ExecutionStatus {
+	executionStatus := &ExecutionStatus{}
+
+	// send an email with labelID set
+	err := processor.SendEmail(user, selftestSubject, "")
+	if err != nil {
+		executionStatus.ErrString = fmt.Sprintf("Unable to send selftest email:%v\n", err)
+		return executionStatus
+	}
+
+	err = processor.AppendToGoogleDocs("Sent selftest email")
+	if err != nil {
+		executionStatus.addWarnMsg(fmt.Sprintf("could not append selftest msg to google docs:%v\n", err))
+		// this is not considered fatal
+	}
+
+	return executionStatus
+}
+
 func isValidEventName(eventName string) bool {
 	return eventName == POWER_FAULT_EVENT_NAME || eventName == POWER_RESTORE_EVENT_NAME
 }
 
-func isTestingMsg(msg *gmail.Message) bool {
-	// look for subject of 'test'
+func isSelftestEmail(msg *gmail.Message) bool {
+	// look for subject that indicates this is a selftest msg
 	msgPart := msg.Payload
 	if msgPart != nil {
 		msgPartHeaders := msgPart.Headers
 		if msgPartHeaders != nil {
 			for _, header := range msgPartHeaders {
 				if strings.EqualFold(header.Name, "subject") {
-					return strings.EqualFold(header.Value, "test powerstatus")
+					return strings.EqualFold(header.Value, selftestSubject)
 				}
 			}
 		}

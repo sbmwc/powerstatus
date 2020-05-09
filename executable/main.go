@@ -11,6 +11,7 @@ func main() {
 	docIdPtr := flag.String("docId", "1xKGTENqUHUPI_CEfX8h9DtyvSf-mMDJFKcwa8Sy8AKA", "The google docs ID (not name) to log things")
 	printAllLabelIdsPtr := flag.Bool("printLabelIds", false, "Print all labelIDs that are currently created in the gmail account")
 	printDocNamePtr := flag.Bool("printDocName", false, "Print the google doc name associated with docId")
+	selftestPtr := flag.Bool("selftest", false, "Send a selftest email to sunsetbeachmututalwatercompany@gmail.com")
 
 	flag.Parse()
 
@@ -22,7 +23,7 @@ func main() {
 
 	client := getHTTPClientUsingFilesystem()
 
-	processor, err := common.NewEmailProcessor(client)
+	processor, err := common.NewEmailProcessor(client, *labelIdPtr, *docIdPtr, "")
 	if err != nil {
 		fmt.Printf("ERROR:Could not create processor:%v\n", err)
 		return
@@ -44,7 +45,7 @@ func main() {
 		if *docIdPtr == "" {
 			fmt.Printf("Missing docId")
 		} else {
-			name, err := processor.GetDocName(*docIdPtr)
+			name, err := processor.GetDocName()
 			if err != nil {
 				fmt.Printf("Could not get doc name:%v\n", err)
 			} else {
@@ -54,7 +55,22 @@ func main() {
 		return
 	}
 
-	executionStatus := processor.LookForAndProcessEmails(*labelIdPtr, *docIdPtr)
+	if *selftestPtr {
+		executionStatus := processor.StartSelftest()
+		if executionStatus.ErrString != "" {
+			fmt.Printf("ERROR:%s\n", executionStatus.ErrString)
+			return
+		}
+
+		if len(executionStatus.WarnMsgs) > 0 {
+			fmt.Printf("WARNINGS:%v\n", executionStatus.WarnMsgs)
+		}
+
+		fmt.Printf("Sent selftest email message\n")
+		return
+	}
+
+	executionStatus := processor.LookForAndProcessEmails()
 	if executionStatus.ErrString != "" {
 		fmt.Printf("ERROR:%s\n", executionStatus.ErrString)
 		return
