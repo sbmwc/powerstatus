@@ -147,7 +147,7 @@ func (processor *EmailProcessor) SendEmail(to string, subject string, plaintext 
 	sb.WriteString(plaintext)
 
 	gmsg := gmail.Message{
-		Raw: base64.StdEncoding.EncodeToString([]byte(sb.String())),
+		Raw: base64.RawURLEncoding.EncodeToString([]byte(sb.String())),
 	}
 
 	_, err := processor.gmailService.Users.Messages.Send("me", &gmsg).Do()
@@ -205,7 +205,7 @@ func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
 		if isSelftestEmail(msg) {
 			processor.AppendToGoogleDocs("Selftest OK")
 			if processor.NotificationEmailAddresses != "" {
-				processor.SendEmail(processor.NotificationEmailAddresses, "selftest OK", "")
+				processor.SendEmail(processor.NotificationEmailAddresses, "Selftest OK", "")
 			} else {
 				fmt.Printf("Selftest OK\n")
 			}
