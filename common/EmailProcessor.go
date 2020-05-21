@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -177,7 +178,11 @@ func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
 		}
 		r, err := req.Do()
 		if err != nil {
-			executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v", err)
+			if serr, ok := err.(*url.Error); ok {
+				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v\n AND serr:%v", err, serr.Err)
+			} else {
+				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v", err)
+			}
 			return executionStatus
 		}
 		for _, m := range r.Messages {
