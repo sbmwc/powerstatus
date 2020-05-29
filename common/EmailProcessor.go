@@ -3,6 +3,7 @@ package common
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -178,8 +179,11 @@ func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
 		}
 		r, err := req.Do()
 		if err != nil {
-			if serr, ok := err.(*url.Error); ok {
-				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v\n AND serr:%v", err, serr.Err)
+			if serr, ok := err.(*net.OpError); ok {
+				// I suspect that serr.Err.Error() == syscall.ECONNRESET, which we could catch and retry
+				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v\n AND NET error:%v", err, serr.Err.Error())
+			} else if serr, ok := err.(*url.Error); ok {
+				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v\n AND URL error:%v", err, serr.Err)
 			} else {
 				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v", err)
 			}
