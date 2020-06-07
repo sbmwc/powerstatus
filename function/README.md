@@ -10,6 +10,8 @@ To see more details of the function or environment, go to https://console.cloud.
 as sunsetbeachmutualwatercompany@gmail.com
 
 Requirements to be set in the google datastore:
+(All properties should NOT be indexed)
+
 kind=credentials  name=gmail-credentials   Properties={
     JsonCredentials=<Json encoded credentials>
     JsonToken=<Json encoded token>
@@ -20,7 +22,7 @@ kind=config  name=function-config  Properties={
     NotificationEmailAddresses=<email where status and warning msgs go to>
 }
 kind=errors  name=last-error  Properties={
-    ErrorString="<none>"
+    ErrorString="<none>" 
 }
 
 credentials/user-credentials can be obtained from executable directory
