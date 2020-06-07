@@ -3,12 +3,13 @@ package common
 import (
 	"encoding/base64"
 	"fmt"
-	"net"
+	//	"net"
 	"net/http"
-	"net/url"
+	//	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	//"syscall"
 	"time"
 
 	"google.golang.org/api/docs/v1"
@@ -165,42 +166,67 @@ func (processor *EmailProcessor) DeleteEmail(msgId string) {
 	processor.gmailService.Users.Messages.Trash("me", msgId).Do()
 }
 
-func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
-	executionStatus := &ExecutionStatus{}
-
-	// get set of unread msgs on label
+func (processor *EmailProcessor) fetchMsgIds(executionStatus *ExecutionStatus) []string {
 	query := "is:unread"
 	msgIds := []string{}
 	pageToken := ""
+	retry := true
 	for {
 		req := processor.gmailService.Users.Messages.List("me").LabelIds(processor.labelId).Q(query)
 		if pageToken != "" {
 			req.PageToken(pageToken)
 		}
-		r, err := req.Do()
+		resp, err := req.Do()
 		if err != nil {
-			if serr, ok := err.(*net.OpError); ok {
-				// I suspect that serr.Err.Error() == syscall.ECONNRESET, which we could catch and retry
-				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v\n AND NET error:%v", err, serr.Err.Error())
-			} else if serr, ok := err.(*url.Error); ok {
-				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v\n AND URL error:%v", err, serr.Err)
-			} else {
-				executionStatus.ErrString = fmt.Sprintf("Unable to retrieve messages: %v", err)
+			// try one additional time -- we've seen google can return a TCP read error--connectionr reset by peer
+			// and I think because the google email service was restarted in between sucessive calls from us, so just try one additional time
+			// before giving up.  Note that we are doing this retry for all errors, we probably could trap
+			// specific errors as in this, but could not get to work
+			//			if urlErr, ok := err.(*url.Error); ok {
+			//				switch t := urlErr.Err.(type) {
+			//				//https://stackoverflow.com/questions/22761562/portable-way-to-detect-different-kinds-of-network-error-in-golang
+			//				case *net.OpError:
+			//					network error
+			//
+			//				case syscall.Errno:
+			//		            if t == syscall.ECONNRESET { ...
+			//
+			if retry {
+				retry = false
+				executionStatus.addWarnMsg(fmt.Sprintf("First time: retrieve msgs from gmail failed, error:%v", err))
+				continue
 			}
-			return executionStatus
+
+			// we already retried, so this is now an error
+			executionStatus.ErrString = fmt.Sprintf("Second time: retrieve msgs from gmail failed, error:%v", err)
+			return nil
 		}
-		for _, m := range r.Messages {
-			msgIds = append(msgIds, m.Id)
+		// allow retries to be done.  Consider retry worked once, but we got multiple pages.  Should we really do this?
+		retry = true
+
+		for _, msg := range resp.Messages {
+			msgIds = append(msgIds, msg.Id)
 		}
 
-		if r.NextPageToken == "" {
+		if resp.NextPageToken == "" {
 			break
 		}
-		pageToken = r.NextPageToken
+		pageToken = resp.NextPageToken
 	}
 
-	// sort message ID in ascending order
+	// sort message ID in ascending order -- gmail returns possibly in reverse order of arrival
 	sort.Strings(msgIds)
+	return msgIds
+}
+
+func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
+	executionStatus := &ExecutionStatus{}
+
+	// get set of unread msgs on label
+	msgIds := processor.fetchMsgIds(executionStatus)
+	if msgIds == nil {
+		return executionStatus
+	}
 
 	// read msgs and process one by one
 	for _, msgId := range msgIds {

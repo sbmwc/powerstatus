@@ -1,2 +1,6 @@
 .project
 .settings
+executable/executable
+executable/credentials.json
+executable/token.json
+function/vendor
