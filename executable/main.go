@@ -12,6 +12,7 @@ func main() {
 	printAllLabelIdsPtr := flag.Bool("printLabelIds", false, "Print all labelIDs that are currently created in the gmail account")
 	printDocNamePtr := flag.Bool("printDocName", false, "Print the google doc name associated with docId")
 	selftestPtr := flag.Bool("selftest", false, "Send a selftest email to sunsetbeachmututalwatercompany@gmail.com")
+	notificationEmailAddresses := flag.String("notificationEmailAddresses", "sunsetbeachmutualwatercompany@gmail.com", "Email address(es) where to send notifications")
 
 	flag.Parse()
 
@@ -23,7 +24,7 @@ func main() {
 
 	client := getHTTPClientUsingFilesystem()
 
-	processor, err := common.NewEmailProcessor(client, *labelIdPtr, *docIdPtr, "")
+	processor, err := common.NewEmailProcessor(client, *labelIdPtr, *docIdPtr, "", *notificationEmailAddresses)
 	if err != nil {
 		fmt.Printf("ERROR:Could not create processor:%v\n", err)
 		return

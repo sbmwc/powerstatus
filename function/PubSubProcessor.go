@@ -33,6 +33,7 @@ type Credentials struct {
 type FunctionConfig struct {
 	LabelId                    string
 	DocId                      string
+	StatusEmailAddresses       string
 	NotificationEmailAddresses string
 }
 
@@ -82,7 +83,7 @@ func PubSubProcessor(ctx context.Context, m PubSubMessage) error {
 		log.Fatalf("Failed to get function config: %v\n", err)
 	}
 
-	processor, err := common.NewEmailProcessor(httpClient, functionConfig.LabelId, functionConfig.DocId, functionConfig.NotificationEmailAddresses)
+	processor, err := common.NewEmailProcessor(httpClient, functionConfig.LabelId, functionConfig.DocId, functionConfig.StatusEmailAddresses, functionConfig.NotificationEmailAddresses)
 	if err != nil {
 		log.Fatalf("ERROR:Could not create processor:%v\n", err)
 	}
@@ -106,16 +107,16 @@ func invoke(processor *common.EmailProcessor, functionConfig FunctionConfig) err
 		fmt.Printf("Successfully processed %d messages:%v\n", len(executionStatus.MsgIdsProcessed), executionStatus.MsgIdsProcessed)
 
 		if b, _ := storeErrorString(noError); b {
-			// previous run had an error, so send out notification of all-good
+			// previous run had an error, so send out status of all-good
 			okstr := "Successful run after previous error(s)"
 			processor.AppendToGoogleDocs(okstr)
-			processor.SendEmail(functionConfig.NotificationEmailAddresses, "Powerstatus Script OK", okstr)
+			processor.SendEmail(functionConfig.StatusEmailAddresses, "Powerstatus Script OK", okstr)
 		}
 
 		if len(executionStatus.WarnMsgs) > 0 {
 			warnStr := fmt.Sprintf("Warnings:%v\n", executionStatus.WarnMsgs)
 			processor.AppendToGoogleDocs(warnStr)
-			processor.SendEmail(functionConfig.NotificationEmailAddresses, "Powerstatus Script Warning", warnStr)
+			processor.SendEmail(functionConfig.StatusEmailAddresses, "Powerstatus Script Warning", warnStr)
 		}
 	} else {
 		// error!
@@ -123,9 +124,9 @@ func invoke(processor *common.EmailProcessor, functionConfig FunctionConfig) err
 		fmt.Printf(errStr)
 
 		if b, _ := storeErrorString(executionStatus.ErrString); b {
-			// first error -- i.e., no previous error so send out notification
+			// first error -- i.e., no previous error so send out error status
 			processor.AppendToGoogleDocs(errStr)
-			processor.SendEmail(functionConfig.NotificationEmailAddresses, "Powerstatus Script Error!", errStr)
+			processor.SendEmail(functionConfig.StatusEmailAddresses, "Powerstatus Script Error!", errStr)
 			return fmt.Errorf(errStr)
 		}
 	}
@@ -142,12 +143,12 @@ func selftest(processor *common.EmailProcessor, functionConfig FunctionConfig) e
 		if len(executionStatus.WarnMsgs) > 0 {
 			warnStr := fmt.Sprintf("Sending selftest warnings:%v\n", executionStatus.WarnMsgs)
 			processor.AppendToGoogleDocs(warnStr)
-			processor.SendEmail(functionConfig.NotificationEmailAddresses, "Sending selftest Script Warning", warnStr)
+			processor.SendEmail(functionConfig.StatusEmailAddresses, "Sending selftest Script Warning", warnStr)
 		}
 	} else {
 		// error!
 		errStr := fmt.Sprintf("Sending selftest ERROR:%s\n", executionStatus.ErrString)
-		processor.SendEmail(functionConfig.NotificationEmailAddresses, "Sending selftest Script Error!", errStr)
+		processor.SendEmail(functionConfig.StatusEmailAddresses, "Sending selftest Script Error!", errStr)
 		return fmt.Errorf(errStr)
 	}
 

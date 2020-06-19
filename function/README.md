@@ -19,7 +19,8 @@ kind=credentials  name=gmail-credentials   Properties={
 kind=config  name=function-config  Properties={
     DocId=<docId>
     LabelId=<labelId>
-    NotificationEmailAddresses=<email where status and warning msgs go to>
+    StatusEmailAddresses=<email(s) where warning, errors, and SelfTest msgs go to>
+    NotificationEmailAddresses=<email(s) where actual notifications go to>
 }
 kind=errors  name=last-error  Properties={
     ErrorString="<none>" 

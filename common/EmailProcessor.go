@@ -55,7 +55,8 @@ type EmailProcessor struct {
 	client                     *http.Client
 	labelId                    string
 	docId                      string
-	NotificationEmailAddresses string
+	statusEmailAddresses       string
+	notificationEmailAddresses string
 	gmailService               *gmail.Service
 	docsService                *docs.Service
 }
@@ -71,7 +72,7 @@ func GetNeededScopes() []string {
 	}
 }
 
-func NewEmailProcessor(client *http.Client, labelId string, docId string, notificationEmailAddresses string) (*EmailProcessor, error) {
+func NewEmailProcessor(client *http.Client, labelId string, docId string, statusEmailAddresses string, notificationEmailAddresses string) (*EmailProcessor, error) {
 	gmailService, err := gmail.New(client)
 	if err != nil {
 		return nil, err
@@ -82,7 +83,7 @@ func NewEmailProcessor(client *http.Client, labelId string, docId string, notifi
 		return nil, err
 	}
 
-	return &EmailProcessor{client, labelId, docId, notificationEmailAddresses, gmailService, docsService}, nil
+	return &EmailProcessor{client, labelId, docId, statusEmailAddresses, notificationEmailAddresses, gmailService, docsService}, nil
 }
 
 func (processor *EmailProcessor) GetAllLabels() ([]LabelInfo, error) {
@@ -170,7 +171,7 @@ func (processor *EmailProcessor) fetchMsgIds(executionStatus *ExecutionStatus) [
 	query := "is:unread"
 	msgIds := []string{}
 	pageToken := ""
-	retry := true
+	var firstErr error = nil
 	for {
 		req := processor.gmailService.Users.Messages.List("me").LabelIds(processor.labelId).Q(query)
 		if pageToken != "" {
@@ -191,18 +192,18 @@ func (processor *EmailProcessor) fetchMsgIds(executionStatus *ExecutionStatus) [
 			//				case syscall.Errno:
 			//		            if t == syscall.ECONNRESET { ...
 			//
-			if retry {
-				retry = false
-				executionStatus.addWarnMsg(fmt.Sprintf("First time: retrieve msgs from gmail failed, error:%v", err))
+			if firstErr == nil {
+				firstErr = err
+				executionStatus.addWarnMsg(fmt.Sprintf("First time: retrieve msgs from gmail failed, error:%v", firstErr))
 				continue
 			}
 
 			// we already retried, so this is now an error
-			executionStatus.ErrString = fmt.Sprintf("Second time: retrieve msgs from gmail failed, error:%v", err)
+			executionStatus.ErrString = fmt.Sprintf("Second time: retrieve msgs from gmail failed, error:%v\n AND \nfirstErr:%v", err, firstErr)
 			return nil
 		}
 		// allow retries to be done.  Consider retry worked once, but we got multiple pages.  Should we really do this?
-		retry = true
+		firstErr = nil
 
 		for _, msg := range resp.Messages {
 			msgIds = append(msgIds, msg.Id)
@@ -239,8 +240,8 @@ func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
 		// see if this is a testing message and if so, handle that
 		if isSelftestEmail(msg) {
 			processor.AppendToGoogleDocs("Selftest OK")
-			if processor.NotificationEmailAddresses != "" {
-				processor.SendEmail(processor.NotificationEmailAddresses, "Selftest OK", "")
+			if processor.statusEmailAddresses != "" {
+				processor.SendEmail(processor.statusEmailAddresses, "Selftest OK", "")
 			} else {
 				fmt.Printf("Selftest OK\n")
 			}
@@ -268,7 +269,7 @@ func (processor *EmailProcessor) LookForAndProcessEmails() *ExecutionStatus {
 					}
 
 					emailContent := formatPowerEmailContent(eventName, eventTime)
-					err = processor.SendEmail("jim@planeshavings.com" /*sbmwc-powerstatus@googlegroups.com"*/, "Power Status Notification", emailContent)
+					err = processor.SendEmail(processor.notificationEmailAddresses, "Power Status Notification", emailContent)
 					if err != nil {
 						executionStatus.ErrString = fmt.Sprintf("Unable to send email to google groups, content:%s, err:%v\n", emailContent, err)
 						return executionStatus
