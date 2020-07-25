@@ -78,16 +78,12 @@ func getHTTPClientUsingFilesystem() *http.Client {
 	}
 	httpClient := config.Client(context.Background(), tok)
 
-	//	updatedToken, err := config.TokenSource(context.Background(), tok).Token()
-	//	if err == nil {
-	//		fmt.Printf("token after:%v\n", *updatedToken)
-	//		updatedTokenAsJson, err := json.Marshal(*updatedToken)
-	//		if err == nil {
-	//			fmt.Printf("token after as json:%s\n", updatedTokenAsJson)
-	//		}
-	//	} else {
-	//		fmt.Printf("Could not get updated token")
-	//	}
+	updatedToken, err := config.TokenSource(context.Background(), tok).Token()
+	if err == nil {
+		if *updatedToken != *tok {
+			fmt.Printf("token as json changed.  Was:%s now:%s\n", *tok, *updatedToken)
+		}
+	}
 
 	return httpClient
 }
