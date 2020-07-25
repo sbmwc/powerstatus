@@ -194,7 +194,7 @@ func (processor *EmailProcessor) fetchMsgIds(executionStatus *ExecutionStatus) [
 			//
 			if firstErr == nil {
 				firstErr = err
-				executionStatus.addWarnMsg(fmt.Sprintf("First time: retrieve msgs from gmail failed, error:%v", firstErr))
+				//executionStatus.addWarnMsg(fmt.Sprintf("First time: retrieve msgs from gmail failed, error:%v", firstErr))
 				continue
 			}
 

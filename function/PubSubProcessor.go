@@ -64,8 +64,17 @@ func init() {
 	httpClient = config.Client(ctx, tok)
 
 	// looks like this would return the updated token if it is really needed (not clear)
-	//	updatedToken, _ := config.TokenSource(ctx, tok).Token()
-	//	fmt.Printf("token after:%v\n", *updatedToken)
+
+	updatedToken, err := config.TokenSource(context.Background(), tok).Token()
+	if err == nil {
+		updatedTokenAsJsonBytes, err := json.Marshal(*updatedToken)
+		updatedTokenAsJsonString := string(updatedTokenAsJsonBytes)
+		if err == nil {
+			if updatedTokenAsJsonString != credentials.JsonToken {
+				fmt.Printf("token as json changed.  Was:%s now:%s\n", credentials.JsonCredentials, updatedTokenAsJsonString)
+			}
+		}
+	}
 
 	fmt.Printf("Successfully inititailzed from DB\n")
 }

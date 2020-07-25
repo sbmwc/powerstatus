@@ -1,6 +1,6 @@
 module sbmwc/powerstatus/function
 
-go 1.11
+go 1.13
 
 require (
 	cloud.google.com/go/datastore v1.1.0
