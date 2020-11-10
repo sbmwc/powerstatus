@@ -1,23 +1,26 @@
 package function
 
 import (
+	"cloud.google.com/go/datastore"
+	"cloud.google.com/go/errorreporting"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-
-	"cloud.google.com/go/datastore"
 	//"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"sbmwc/powerstatus/common"
 )
 
+const projectID string = "sbmwc-powerstatus"
 const noError string = "<none>"
 
 var ctx context.Context
 var datastoreClient *datastore.Client
+var errorClient *errorreporting.Client
 var httpClient *http.Client
 
 // PubSubMessage is the payload of a Pub/Sub event.
@@ -43,13 +46,29 @@ type ErrorData struct {
 }
 
 func init() {
+	var err error
+
 	ctx = context.Background()
-	datastoreClient, _ = datastore.NewClient(ctx, datastore.DetectProjectID)
+
+	// datastore
+	datastoreClient, _ = datastore.NewClient(ctx, projectID)
+
+	// error reporting
+	errorClient, err = errorreporting.NewClient(ctx, projectID, errorreporting.Config{
+		ServiceName: projectID, /* could be anything */
+		OnError: func(err error) {
+			log.Printf("Could not report  error: %v\n", err)
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Initialized reporting client\n")
 
 	// get credentials and token from DB
 	k := datastore.NameKey("credentials", "gmail-credentials", nil)
 	var credentials Credentials
-	if err := datastoreClient.Get(ctx, k, &credentials); err != nil {
+	if err = datastoreClient.Get(ctx, k, &credentials); err != nil {
 		log.Fatalf("Failed to get DB credentials: %v\n", err)
 	}
 
@@ -136,9 +155,20 @@ func invoke(processor *common.EmailProcessor, functionConfig FunctionConfig) err
 			// first error -- i.e., no previous error so send out error status
 			processor.AppendToGoogleDocs(errStr)
 			processor.SendEmail(functionConfig.StatusEmailAddresses, "Powerstatus Script Error!", errStr)
+
+			// just to make sure this error gets out (in case the error was that the google client
+			// connection/credentials are no longer valid and we could not send an email nor update
+			// google docs), report an error which results in an email being set to the account's owner (us).
+			// This error will trigger an email to us if the first time we've seen this error or if
+			// the error was prevously resolved.
+			errorClient.Report(errorreporting.Entry{
+				Error: errors.New(errStr),
+			})
+			errorClient.Flush()
 			return fmt.Errorf(errStr)
 		}
 	}
+
 	return nil
 }
 
