@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 
 	"golang.org/x/net/context"
@@ -24,6 +25,9 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	if _, err := fmt.Scan(&authCode); err != nil {
 		log.Fatalf("Unable to read authorization code: %v", err)
 	}
+
+	// unescape
+	authCode, _ = url.QueryUnescape(authCode)
 
 	tok, err := config.Exchange(context.TODO(), authCode)
 	if err != nil {
@@ -77,13 +81,6 @@ func getHTTPClientUsingFilesystem() *http.Client {
 		saveToken(tokFile, tok)
 	}
 	httpClient := config.Client(context.Background(), tok)
-
-	updatedToken, err := config.TokenSource(context.Background(), tok).Token()
-	if err == nil {
-		if *updatedToken != *tok {
-			fmt.Printf("token as json changed.  Was:%s now:%s\n", *tok, *updatedToken)
-		}
-	}
 
 	return httpClient
 }
