@@ -6,4 +6,4 @@ if [ $# -gt 0 ]
     TN="$1"
 fi
 
-gcloud functions logs read "$TN"
+gcloud functions logs read --format=list[compact] "$TN"
