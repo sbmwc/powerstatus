@@ -18,7 +18,7 @@ import (
 
 // special username for gmail that means "my account" -- in this case sunsetbeachmutualwatercompany@gmail.com
 const user string = "sunsetbeachmutualwatercompany@gmail.com" // "me"
-const POWER_FAULT_EVENT_NAME string = "Power Fault"
+const POWER_FAULT_EVENT_NAME string = "Power is Down"
 const POWER_RESTORE_EVENT_NAME string = "Power Restore"
 const selftestSubject = "powerstatus selftest"
 
